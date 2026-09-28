@@ -1,0 +1,9 @@
+# Never commit client or product images, or generated outputs (public repo)
+*.png
+*.jpg
+*.jpeg
+*.webp
+tryon_output/
+work/
+__pycache__/
+.ipynb_checkpoints/
