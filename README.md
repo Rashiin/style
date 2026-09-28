@@ -13,8 +13,11 @@
 1. **حساب Kaggle:** در [kaggle.com](https://www.kaggle.com) ثبت‌نام کن و در *Settings → Phone verification* شماره‌ات را تأیید کن. بدون تأیید تلفن، GPU و اینترنت فعال نمی‌شوند.
 2. **دیتاست خصوصی عکس‌ها:** *Create → New Dataset*، و **Private** بماند. این فایل‌ها را با همین نام‌ها آپلود کن:
    - `person.png`: عکس تمام‌قد (همان عکسی که کارفرما داده)
-   - `blazer.jpg` و `loafers.jpg`: عکس محصولات. عکس تمیز صفحه محصول را بردار، بدون نوشته‌ای مثل «5/8».
-   - اختیاری: `openai_set1.png`، خروجی OpenAI کارفرما برای همین ست. اگر باشد، ستون چهارم تصویر مقایسه می‌شود.
+   - ست ۱: `blazer.jpg` و `loafers.jpg` (عکس تمیز صفحه محصول، بدون نوشته‌ای مثل «5/8»)
+   - ست ۲: `shirt.jpg` (پیراهن سبز) و `trousers.webp` (شلوار مشکی)
+   - ست ۳: `jacket.webp` (کت قهوه‌ای) و `bag.webp` (کیف مشکی)
+   - پسوند فایل مهم نیست (jpg، png یا webp)، فقط اسم باید همین باشد.
+   - اختیاری: `openai_set1.png` تا `openai_set3.png`، خروجی OpenAI کارفرما برای هر ست. اگر باشد، ستون چهارم تصویر مقایسه می‌شود.
 3. **ساخت نوت‌بوک:** *Create → New Notebook → File → Import Notebook* و فایل `demo/kaggle_tryon_demo.ipynb` را وارد کن.
 4. **تنظیمات نوت‌بوک** (پنل سمت راست):
    - *Accelerator*: **GPU T4 x2**
