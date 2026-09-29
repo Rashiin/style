@@ -79,6 +79,8 @@ COMFY_SUBDIR = {"unet": "unet", "lora": "loras", "text_encoder": "text_encoders"
 
 # Filled in by setup(); read by build_graph().
 MODELS: dict[str, str | None] = {"version": None, "unet": None, "lora": None, "text_encoder": None, "vae": None}
+if (WORK / "models.json").exists():
+    MODELS.update(json.loads((WORK / "models.json").read_text()))
 
 
 def _run(cmd: list[str], **kw) -> None:
@@ -277,6 +279,12 @@ def start_server(offline: bool = True, extra_args: list[str] | None = None, time
     global _server
     if MODELS["unet"] is None and (WORK / "models.json").exists():
         MODELS.update(json.loads((WORK / "models.json").read_text()))
+    try:
+        _api("/system_stats")
+        print("ComfyUI is already running; reusing it.")
+        return
+    except Exception:
+        pass
     env = _offline_env() if offline else dict(os.environ)
     log = open(WORK / "comfyui.log", "w")
     cmd = [sys.executable, "main.py", "--listen", HOST, "--port", str(PORT), *(extra_args or [])]
@@ -485,10 +493,24 @@ def make_comparison(person: str | Path, products: list[str | Path], ours: str | 
     return dest
 
 
+def clean_corner(path: str | Path, box: tuple[float, float, float, float] = (0.84, 0.0, 1.0, 0.1)) -> Path:
+    """Paint over a badge in a product photo (box as image fractions) with the nearby background colour."""
+    from PIL import Image, ImageDraw
+
+    im = Image.open(path).convert("RGB")
+    w, h = im.size
+    x0, y0, x1, y1 = int(box[0] * w), int(box[1] * h), int(box[2] * w), int(box[3] * h)
+    sample = im.getpixel((max(x0 - 10, 0), min(y1 + 10, h - 1)))
+    ImageDraw.Draw(im).rectangle((x0, y0, x1, y1), fill=sample)
+    dest = WORK / f"clean_{Path(path).stem}.png"
+    im.save(dest)
+    return dest
+
+
 def gpu_info() -> str:
     try:
         return subprocess.run(["nvidia-smi", "--query-gpu=name,memory.total", "--format=csv,noheader"],
-                              capture_output=True, text=True, check=True).stdout.strip()
+                              capture_output=True, text=True, check=True).stdout.strip().splitlines()[0]
     except Exception:
         return "unknown"
 
