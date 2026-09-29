@@ -423,6 +423,10 @@ class PassResult:
     extra: dict = field(default_factory=dict)
 
 
+FRAMING = ("Keep the exact same full-body framing and camera distance as picture 1: "
+           "do not zoom, crop or add borders.")
+
+
 def check_framing(reference: str | Path, output: str | Path, logo_corner: bool = True) -> tuple[bool, str]:
     """
     Automatic quality gate. Rejects outputs where the model reframed the photo (zoomed in, cropped
@@ -479,7 +483,8 @@ def run_passes(person: str | Path, passes: list[dict], seed: int = 42, name: str
     for i, p in enumerate(passes, start=1):
         total, attempts = 0.0, []
         for attempt in range(max_retries + 1):
-            out, secs = generate(current, p["products"], p["prompt"], seed=seed + attempt, **gen_kw)
+            prompt = p["prompt"] if "framing" in p["prompt"] else p["prompt"] + " " + FRAMING
+            out, secs = generate(current, p["products"], prompt, seed=seed + attempt, **gen_kw)
             total += secs
             ok, why = check_framing(person, out, logo_corner=bool(keep_regions))
             attempts.append({"seed": seed + attempt, "seconds": round(secs, 1), "qc": why})
