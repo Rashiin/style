@@ -423,24 +423,76 @@ class PassResult:
     extra: dict = field(default_factory=dict)
 
 
+def check_framing(reference: str | Path, output: str | Path, logo_corner: bool = True) -> tuple[bool, str]:
+    """
+    Automatic quality gate. Rejects outputs where the model reframed the photo (zoomed in, cropped
+    the feet, shifted the person) or painted a frame/texture into the plain background.
+    Horizontal extent may change (a bag or open jacket widens the silhouette); vertical may not.
+    """
+    import numpy as np
+    from PIL import Image
+
+    out_im = Image.open(output).convert("RGB")
+    size = out_im.size
+
+    def stats(im):
+        a = np.asarray(im).astype(np.float32)
+        h, w = a.shape[:2]
+        b = 16
+        top = a[:b, : int(0.6 * w)] if logo_corner else a[:b]
+        right = a[int(0.12 * h):, -b:] if logo_corner else a[:, -b:]
+        border = np.concatenate([top.reshape(-1, 3), a[-b:].reshape(-1, 3), a[:, :b].reshape(-1, 3), right.reshape(-1, 3)])
+        bg = np.median(border, axis=0)
+        mask = np.abs(a - bg).max(axis=2) > 40
+        if logo_corner:
+            mask[: int(0.1 * h), int(0.7 * w):] = False
+        ys = np.nonzero(mask.any(axis=1))[0]
+        if len(ys) == 0:
+            return 0.0, 1.0, float(border.std(axis=0).mean())
+        return ys[0] / h, ys[-1] / h, float(border.std(axis=0).mean())
+
+    rt, rb, rs = stats(Image.open(reference).convert("RGB").resize(size, Image.LANCZOS))
+    ot, ob, os_ = stats(out_im)
+    problems = []
+    if abs(ot - rt) > 0.03 or abs(ob - rb) > 0.03:
+        problems.append(f"framing moved (top {rt:.3f}->{ot:.3f}, bottom {rb:.3f}->{ob:.3f})")
+    if os_ > max(3.5, rs * 3):
+        problems.append(f"background border not plain (std {rs:.1f}->{os_:.1f})")
+    return (not problems), "; ".join(problems) or "ok"
+
+
 def run_passes(person: str | Path, passes: list[dict], seed: int = 42, name: str = "set",
-               keep_regions: list[tuple[float, float, float, float]] | None = None, **gen_kw) -> list[PassResult]:
+               keep_regions: list[tuple[float, float, float, float]] | None = None, max_retries: int = 2,
+               **gen_kw) -> list[PassResult]:
     """
     Run one or more passes; each pass dresses the output of the previous one.
     passes = [{"products": [path, ...], "prompt": "..."}, ...]
     keep_regions: boxes (x0, y0, x1, y1) as fractions of the image that are copied
     back from the original photo after generation (e.g. a site logo).
+    Each pass goes through check_framing(); a rejected output is regenerated with the next seed,
+    up to max_retries times.
     gen_kw: passed to build_graph (megapixels, steps, cfg).
     """
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     current = Path(person)
     results = []
     for i, p in enumerate(passes, start=1):
-        out, secs = generate(current, p["products"], p["prompt"], seed=seed, **gen_kw)
+        total, attempts = 0.0, []
+        for attempt in range(max_retries + 1):
+            out, secs = generate(current, p["products"], p["prompt"], seed=seed + attempt, **gen_kw)
+            total += secs
+            ok, why = check_framing(person, out, logo_corner=bool(keep_regions))
+            attempts.append({"seed": seed + attempt, "seconds": round(secs, 1), "qc": why})
+            print(f"{name} pass {i}, attempt {attempt + 1}: {secs:.1f}s, quality check: {why}")
+            if ok:
+                break
+        else:
+            print(f"  ! {name} pass {i}: no attempt passed the quality check; keeping the last one.")
         final = OUT_DIR / f"{name}_pass{i}.png"
         _finish(Path(person), out, final, keep_regions)
-        print(f"{name} pass {i}: {secs:.1f}s -> {final}")
-        results.append(PassResult([str(x) for x in p["products"]], p["prompt"], final, secs, {"raw": str(out)}))
+        print(f"{name} pass {i} -> {final}")
+        results.append(PassResult([str(x) for x in p["products"]], p["prompt"], final, total,
+                                  {"raw": str(out), "attempts": attempts, "qc_ok": ok}))
         current = final
     return results
 
@@ -569,13 +621,17 @@ def write_report(results: dict[str, list[PassResult]], offline: bool = True) -> 
         f"- Acceleration LoRA: {MODELS['lora'] or 'none'}",
         f"- Outbound network during generation: {'blocked' if offline else 'allowed'}",
         "",
-        "| Set | Pass | Products | Seconds |",
-        "|---|---|---|---|",
+        "| Set | Pass | Products | Attempts | Seconds per attempt | Quality check |",
+        "|---|---|---|---|---|---|",
     ]
     for name, passes in results.items():
         for i, r in enumerate(passes, start=1):
-            lines.append(f"| {name} | {i} | {', '.join(Path(p).name for p in r.products)} | {r.seconds:.1f} |")
-    lines += ["", "The first pass includes loading the model into GPU memory; later passes show the steady-state time."]
+            att = r.extra.get("attempts") or [{"seconds": round(r.seconds, 1), "qc": "n/a"}]
+            lines.append(f"| {name} | {i} | {', '.join(Path(p).name for p in r.products)} | {len(att)} | "
+                         f"{', '.join(str(a['seconds']) for a in att)} | {att[-1]['qc']} |")
+    lines += ["",
+              "Each output is checked automatically (framing and plain background); a rejected output is",
+              "regenerated with a new seed. The first attempt of the run includes loading the model into GPU memory."]
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     path = OUT_DIR / "report.md"
     path.write_text("\n".join(lines))
