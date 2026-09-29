@@ -358,10 +358,23 @@ def _stage(path: str | Path) -> str:
     return name
 
 
+def _report_progress(t0: float) -> None:
+    """Print the generator's latest status line so a long run does not look frozen."""
+    try:
+        text = (WORK / "comfyui.log").read_text(errors="ignore")[-4000:]
+    except OSError:
+        return
+    lines = [l.strip() for l in re.split(r"[\r\n]+", text) if l.strip()]
+    steps = [l for l in lines if re.search(r"\d+%\|", l)]
+    last = steps[-1] if steps else (lines[-1] if lines else "")
+    print(f"  ... {time.time() - t0:.0f}s elapsed | {last[:120]}", flush=True)
+
+
 def generate(person: str | Path, products: list[str | Path], prompt: str, seed: int = 42, **kw) -> tuple[Path, float]:
     graph = build_graph(_stage(person), [_stage(p) for p in products], prompt, seed=seed, **kw)
     t0 = time.time()
     prompt_id = _api("/prompt", {"prompt": graph, "client_id": "tryon-demo"})["prompt_id"]
+    last_report = t0
     while True:
         hist = _api(f"/history/{prompt_id}")
         if prompt_id in hist:
@@ -372,6 +385,9 @@ def generate(person: str | Path, products: list[str | Path], prompt: str, seed: 
                 raise RuntimeError(f"Generation failed: {json.dumps(msgs, indent=1)[:4000]}")
             if status.get("completed"):
                 break
+        if time.time() - last_report > 30:
+            _report_progress(t0)
+            last_report = time.time()
         time.sleep(1)
     elapsed = time.time() - t0
     img = entry["outputs"]["save"]["images"][0]
