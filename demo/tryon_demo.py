@@ -150,8 +150,18 @@ def _download(kind: str, repo: str, filename: str, attempts: int = 5) -> str:
     return path.name
 
 
+def _require_gpu() -> None:
+    import torch
+
+    if not torch.cuda.is_available():
+        raise RuntimeError(
+            "No GPU in this session (torch " + torch.__version__ + "). In Kaggle: Settings -> Accelerator -> "
+            "GPU T4 x2. Changing it restarts the session, so run the notebook again from the top.")
+
+
 def setup(version: str = "2511") -> dict:
     """Install ComfyUI and download the models. Falls back to 2509 if 2511 files are missing."""
+    _require_gpu()
     WORK.mkdir(parents=True, exist_ok=True)
     _install_comfy()
 
@@ -279,6 +289,7 @@ def start_server(offline: bool = True, extra_args: list[str] | None = None, time
     global _server
     if MODELS["unet"] is None and (WORK / "models.json").exists():
         MODELS.update(json.loads((WORK / "models.json").read_text()))
+    _require_gpu()
     try:
         _api("/system_stats")
         print("ComfyUI is already running; reusing it.")
