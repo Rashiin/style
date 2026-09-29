@@ -440,22 +440,56 @@ def run_passes(person: str | Path, passes: list[dict], seed: int = 42, name: str
         final = OUT_DIR / f"{name}_pass{i}.png"
         _finish(Path(person), out, final, keep_regions)
         print(f"{name} pass {i}: {secs:.1f}s -> {final}")
-        results.append(PassResult([str(x) for x in p["products"]], p["prompt"], final, secs))
+        results.append(PassResult([str(x) for x in p["products"]], p["prompt"], final, secs, {"raw": str(out)}))
         current = final
     return results
 
 
-def _finish(original: Path, generated: Path, dest: Path, keep_regions) -> None:
+def _finish(original: Path, generated: Path, dest: Path, keep_regions, feather: int = 12) -> None:
+    """
+    Copy keep_regions (e.g. the site logo) back from the original photo. The patch is shifted to the
+    generated image's local background tone (measured on a ring around the box) and blended in with
+    soft edges, so no lighter or darker rectangle shows when the model drifts the background colour.
+    """
+    import numpy as np
     from PIL import Image
 
-    out = Image.open(generated).convert("RGB")
+    out_im = Image.open(generated).convert("RGB")
     if keep_regions:
-        src = Image.open(original).convert("RGB").resize(out.size, Image.LANCZOS)
-        w, h = out.size
+        out = np.asarray(out_im).astype(np.float32)
+        src = np.asarray(Image.open(original).convert("RGB").resize(out_im.size, Image.LANCZOS)).astype(np.float32)
+        h, w = out.shape[:2]
         for x0, y0, x1, y1 in keep_regions:
-            box = (int(x0 * w), int(y0 * h), int(x1 * w), int(y1 * h))
-            out.paste(src.crop(box), box)
-    out.save(dest)
+            bx0, by0, bx1, by1 = int(x0 * w), int(y0 * h), int(x1 * w), int(y1 * h)
+            ring = np.zeros((h, w), bool)
+            ring[max(by0 - feather, 0):min(by1 + feather, h), max(bx0 - feather, 0):min(bx1 + feather, w)] = True
+            ring[by0:by1, bx0:bx1] = False
+            if not ring.any():  # box covers the whole image
+                ring[:] = True
+            shift = out[ring].mean(axis=0) - src[ring].mean(axis=0)
+            patch = np.clip(src[by0:by1, bx0:bx1] + shift, 0, 255)
+            # Alpha ramps from 0 at the box edge to 1 at `feather` pixels inside (image borders stay hard).
+            yy, xx = np.mgrid[by0:by1, bx0:bx1]
+            dist = np.minimum.reduce([
+                xx - bx0 if bx0 > 0 else np.full_like(xx, feather),
+                bx1 - 1 - xx if bx1 < w else np.full_like(xx, feather),
+                yy - by0 if by0 > 0 else np.full_like(yy, feather),
+                by1 - 1 - yy if by1 < h else np.full_like(yy, feather),
+            ])
+            alpha = np.clip(dist / feather, 0, 1)[..., None]
+            out[by0:by1, bx0:bx1] = alpha * patch + (1 - alpha) * out[by0:by1, bx0:bx1]
+        out_im = Image.fromarray(out.round().astype(np.uint8))
+    out_im.save(dest)
+
+
+def refinish(person: str | Path, results: list[PassResult],
+             keep_regions: list[tuple[float, float, float, float]]) -> None:
+    """Re-apply the logo step to finished passes from their raw generator outputs (no regeneration)."""
+    for r in results:
+        raw = r.extra.get("raw")
+        if raw:
+            _finish(Path(person), Path(raw), r.output, keep_regions)
+            print("re-finished", r.output)
 
 
 # --------------------------------------------------------------------------- #
