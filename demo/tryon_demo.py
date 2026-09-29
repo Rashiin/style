@@ -122,11 +122,24 @@ def _find_file(candidates: list[tuple[str, str]]) -> tuple[str, str] | None:
     return None
 
 
-def _download(kind: str, repo: str, filename: str) -> str:
-    from huggingface_hub import hf_hub_download
+def _download(kind: str, repo: str, filename: str, attempts: int = 5) -> str:
+    from huggingface_hub import constants, hf_hub_download
 
-    print(f"Downloading {kind}: {repo}/{filename}")
-    path = Path(hf_hub_download(repo, filename, local_dir=WORK / "hf" / repo.replace("/", "__")))
+    # The Xet transfer backend can stall near the end of large files without raising.
+    # Plain HTTP times out on a stall instead, and the retry resumes the partial file.
+    constants.HF_HUB_DISABLE_XET = True
+    constants.HF_HUB_DOWNLOAD_TIMEOUT = max(constants.HF_HUB_DOWNLOAD_TIMEOUT, 60)
+
+    print(f"Downloading {kind}: {repo}/{filename}  (free disk: {shutil.disk_usage(WORK).free / 1e9:.0f} GB)")
+    for attempt in range(1, attempts + 1):
+        try:
+            path = Path(hf_hub_download(repo, filename, local_dir=WORK / "hf" / repo.replace("/", "__")))
+            break
+        except Exception as e:
+            if attempt == attempts:
+                raise
+            print(f"  ! download interrupted ({type(e).__name__}: {e}); resuming, attempt {attempt + 1}/{attempts}")
+            time.sleep(5)
     target_dir = COMFY_DIR / "models" / COMFY_SUBDIR[kind]
     target_dir.mkdir(parents=True, exist_ok=True)
     link = target_dir / path.name
